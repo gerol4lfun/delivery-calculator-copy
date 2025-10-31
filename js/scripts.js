@@ -405,10 +405,8 @@ async function authenticate() {
 
 // Функция выхода
 function logout() {
-    console.log("=== Выход из системы ===");
     try {
         const savedLogin = localStorage.getItem('savedLogin');
-        console.log("Выход пользователя:", savedLogin);
         
         localStorage.removeItem('savedLogin');
         localStorage.removeItem('passwordVersion');
@@ -459,7 +457,6 @@ function logout() {
             mapInstance.geoObjects.remove(currentRoute);
         }
         
-        console.log("✅ Выход выполнен");
     } catch (error) {
         console.error("❌ Ошибка при выходе:", error);
         // Принудительная очистка localStorage и перезагрузка
@@ -485,25 +482,51 @@ async function checkPasswordVersion() {
             .single();
 
         if (error || !data) {
-            // Если пользователь не найден в Supabase - разлогиниваем
+            // Если это сетевая ошибка - НЕ разлогиниваем, продолжаем работу
+            if (isNetworkError(error)) {
+                console.error("Ошибка сети при проверке версии пароля (возможно блокировка Supabase). Продолжаем работу.");
+                return true; // Продолжаем работу при сетевых ошибках
+            }
+            // Другие ошибки (пользователь не найден) - разлогиниваем
             console.error("Пользователь не найден в Supabase при проверке версии:", error);
             logout();
-            alert("Ошибка проверки аккаунта. Пожалуйста, войдите снова.");
             return false;
         }
 
         // Если пользователь деактивирован или версия пароля не совпадает - выход
         if (!data.is_active || data.password_version.toString() !== savedPasswordVersion) {
             logout();
-            alert("Сессия истекла. Пожалуйста, войдите снова.");
+            // Показываем alert только если версия пароля реально изменилась (пароль был изменён)
+            if (data.password_version.toString() !== savedPasswordVersion) {
+                alert("Сессия истекла. Пожалуйста, войдите снова.");
+            }
             return false;
         }
 
         return true;
     } catch (err) {
+        // Если ошибка сети - продолжаем работу, не разлогиниваем
+        if (isNetworkError(err)) {
+            console.error("Ошибка сети при проверке версии пароля. Продолжаем работу.");
+            return true; // Продолжаем работу при сетевых ошибках
+        }
         console.error("Ошибка при проверке версии пароля:", err);
-        return false;
+        return true; // Даже при других ошибках продолжаем работу (менее агрессивно)
     }
+}
+
+// Функция проверки сетевых ошибок
+function isNetworkError(error) {
+    if (!error) return false;
+    const errorStr = JSON.stringify(error).toLowerCase();
+    return errorStr.includes('load failed') || 
+           errorStr.includes('network') || 
+           errorStr.includes('timeout') ||
+           errorStr.includes('err_network_changed') ||
+           errorStr.includes('err_name_not_resolved') ||
+           errorStr.includes('failed to fetch') ||
+           errorStr.includes('networkerror') ||
+           (error.message && error.message.toLowerCase().includes('failed to fetch'));
 }
 
 // Функция для загрузки городов из Supabase с учётом пагинации
@@ -582,9 +605,6 @@ async function onCityChange() {
         console.error('Ошибка при получении данных по городу:', error);
         return;
     }
-
-    console.log("📌 Данные из Supabase для города:", city);
-    console.table(data); // Покажет таблицу всех загруженных данных
 
     if (!data || data.length === 0) {
         alert("Данные для выбранного города не найдены. Попробуйте другой город.");
@@ -768,7 +788,6 @@ function onLengthChange() {
     // Получаем уникальные значения каркаса
     let uniqueFrames = [...new Set(filteredData.map(item => {
         // Отладочное логирование: вывод названия и исходного описания
-        console.log("Обрабатывается элемент:", item["Название"], "исходное описание:", item.frame_description);
 
         // Нормализуем описание:
         // 1. Удаляем слово "двойная" (с любыми пробелами после него)
@@ -782,20 +801,15 @@ function onLengthChange() {
 
         // Убираем лишние пробелы вокруг знака "+"
         cleanDescription = cleanDescription.replace(/\s*\+\s*/g, "+");
-        console.log("Нормализованное описание после правки:", cleanDescription);
 
         // Если строка содержит "+", значит, это составной каркас – возвращаем её целиком
         if (cleanDescription.includes('+')) {
-            console.log("Составной каркас обнаружен, возвращаем:", cleanDescription);
             return cleanDescription;
         }
 
         // Если нет знака "+", ищем простое совпадение для "20х20" или "40х20"
         const matches = cleanDescription.match(/(20х20|40х20)/gi);
         if (matches) {
-            console.log("Найденные совпадения:", matches);
-        } else {
-            console.log("Совпадений не найдено, возвращаем:", cleanDescription);
         }
 
         return matches ? matches.join(",") : cleanDescription;
@@ -1183,9 +1197,6 @@ async function calculateDelivery() {
         let localities = geoObject.getLocalities().map(loc => loc.toLowerCase());
         let administrativeAreas = geoObject.getAdministrativeAreas().map(area => area.toLowerCase());
 
-        // Для отладки: выводим полученные данные
-        console.log("Localities:", localities);
-        console.log("Administrative Areas:", administrativeAreas);
 
         // Проверяем, содержит ли хотя бы одно ключевое слово из массива deliveryRegions
         // любое слово из localities или administrativeAreas
@@ -1451,19 +1462,15 @@ function resetDelivery() {
 
 // Инициализация при загрузке страницы
 window.onload = async function () {
-    console.log("=== Инициализация страницы v2 ===");
-    
     if (localStorage.getItem('appVersion') !== APP_VERSION) {
         localStorage.clear();
     }
     const savedLogin = localStorage.getItem('savedLogin');
-    console.log("Сохранённый логин:", savedLogin);
     
     if (savedLogin) {
         // Убеждаемся, что admin флаг установлен, если это admin (ДО проверки пароля)
         if (savedLogin === 'admin' || savedLogin.toLowerCase() === 'admin') {
             localStorage.setItem(ADMIN_KEY, 'true');
-            console.log("✅ Admin обнаружен при загрузке, флаг установлен ПЕРЕД проверкой");
         }
         
         // Проверяем актуальность версии пароля
@@ -1481,16 +1488,17 @@ window.onload = async function () {
             document.getElementById("login").value = savedLogin;
         }
     } else {
-        console.log("Пользователь не залогинен");
     }
     
-    // Периодическая проверка версии пароля каждые 30 секунд
+    // Периодическая проверка версии пароля каждые 5 минут (увеличено с 30 секунд)
+    // Проверка только если страница видна и пользователь залогинен
     setInterval(async () => {
         const savedLogin = localStorage.getItem('savedLogin');
-        if (savedLogin && document.getElementById("calculator-container").classList.contains("hidden") === false) {
+        if (savedLogin && document.getElementById("calculator-container") && !document.getElementById("calculator-container").classList.contains("hidden")) {
+            // Тихо проверяем версию пароля (не разлогиниваем при сетевых ошибках)
             await checkPasswordVersion();
         }
-    }, 30000); // Проверка каждые 30 секунд
+    }, 300000); // Проверка каждые 5 минут (300000 мс) вместо 30 секунд
     
     // Принудительная проверка кнопки админа через 1 секунду (на случай задержки)
     setTimeout(() => {
@@ -1501,7 +1509,6 @@ window.onload = async function () {
                 adminBtn.classList.remove('hidden');
                 adminBtn.style.display = 'block';
                 adminBtn.style.visibility = 'visible';
-                console.log("✅ Принудительное отображение кнопки админа");
             } else {
                 console.error("❌ Кнопка admin-button всё ещё не найдена после задержки");
             }
