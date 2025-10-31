@@ -19,6 +19,41 @@ function normalizeString(str) {
     return str.trim().toLowerCase().replace(/[\s\u00A0]+/g, "");
 }
 
+// Функция нормализации названий городов (заменяет Ё на Е для сравнения)
+function normalizeCityName(cityName) {
+    if (!cityName) return "";
+    return cityName.trim().toLowerCase().replace(/ё/g, "е").replace(/Ё/g, "Е");
+}
+
+// Функция поиска города в выпадающем списке по нормализованному названию
+function findCityInDropdown(cityName) {
+    if (!cityName) return null;
+    const cityDropdown = document.getElementById('city');
+    if (!cityDropdown || !cityDropdown.options) return null;
+    
+    const normalizedTarget = normalizeCityName(cityName);
+    
+    // Ищем точное совпадение по нормализованному названию
+    for (let i = 0; i < cityDropdown.options.length; i++) {
+        const option = cityDropdown.options[i];
+        if (option.value && normalizeCityName(option.value) === normalizedTarget) {
+            return option.value; // Возвращаем оригинальное название из списка
+        }
+    }
+    
+    // Если точного совпадения нет, ищем частичное (для "Набережные Челны" vs "Челны")
+    for (let i = 0; i < cityDropdown.options.length; i++) {
+        const option = cityDropdown.options[i];
+        if (option.value) {
+            const normalizedOption = normalizeCityName(option.value);
+            if (normalizedTarget.includes(normalizedOption) || normalizedOption.includes(normalizedTarget)) {
+                return option.value;
+            }
+        }
+    }
+    
+    return null;
+}
 
 // Пользователи (СТАРАЯ СИСТЕМА УДАЛЕНА - больше не используется!)
 // ВСЕ пароли теперь хранятся ТОЛЬКО в Supabase в таблице users
@@ -351,9 +386,9 @@ async function authenticate() {
 
         // Проверяем, не админ ли это (для доступа к админ-панели)
         // Важно: проверяем точно как 'admin' (без toLowerCase, так как в базе может быть другой регистр)
-        if (login === 'admin' || login.toLowerCase() === 'admin') {
+        // СТРОГАЯ проверка: только пользователь с логином точно "admin"
+        if (login && login.trim().toLowerCase() === 'admin') {
             localStorage.setItem(ADMIN_KEY, 'true');
-            console.log("Админ вошёл в систему, доступ к админ-панели разрешён");
         } else {
             localStorage.removeItem(ADMIN_KEY);
         }
@@ -1209,9 +1244,25 @@ if (!nearestCity) {
         mapInstance.setCenter(nearestCity.coords, 7);
 
         // Автоматически установить найденный город в выпадающем списке "Город"
-        document.getElementById('city').value = nearestCity.name;
-        // Обновить остальные параметры на основе выбранного города
-        onCityChange();
+        // Используем нормализованное сравнение для поиска правильного названия
+        const cityDropdown = document.getElementById('city');
+        const foundCityName = findCityInDropdown(nearestCity.name);
+        
+        if (foundCityName) {
+            cityDropdown.value = foundCityName;
+            onCityChange();
+        } else {
+            // Если не найдено, пытаемся установить напрямую
+            cityDropdown.value = nearestCity.name;
+            // Пробуем снова через небольшую задержку (на случай, если список ещё загружается)
+            setTimeout(() => {
+                const foundAfterDelay = findCityInDropdown(nearestCity.name);
+                if (foundAfterDelay) {
+                    cityDropdown.value = foundAfterDelay;
+                    onCityChange();
+                }
+            }, 300);
+        }
 
         if (currentRoute) {
             mapInstance.geoObjects.remove(currentRoute);
@@ -1468,63 +1519,35 @@ async function initializeCalculator() {
     
     // Проверяем права админа и показываем/скрываем кнопку админ-панели
     const savedLogin = localStorage.getItem('savedLogin');
-    console.log("=== Проверка прав админа ===");
-    console.log("Логин из localStorage:", savedLogin);
-    console.log("ADMIN_KEY значение:", localStorage.getItem(ADMIN_KEY));
     
-    // Проверяем, является ли пользователь админом
-    const isAdminKey = localStorage.getItem(ADMIN_KEY) === 'true';
-    const isAdminByLogin = savedLogin && (savedLogin === 'admin' || savedLogin.toLowerCase() === 'admin');
-    const isAdmin = isAdminKey || isAdminByLogin;
-    
-    console.log("isAdminKey:", isAdminKey);
-    console.log("isAdminByLogin:", isAdminByLogin);
-    console.log("Итоговый isAdmin:", isAdmin);
+    // СТРОГАЯ проверка: только пользователь с логином точно "admin" (без пробелов, без регистра)
+    const isAdmin = savedLogin && savedLogin.trim().toLowerCase() === 'admin';
     
     // Если это админ, но флаг не установлен - устанавливаем
     if (isAdmin && localStorage.getItem(ADMIN_KEY) !== 'true') {
         localStorage.setItem(ADMIN_KEY, 'true');
-        console.log("✅ Флаг админа установлен");
+    }
+    
+    // Если это НЕ админ, обязательно удаляем флаг
+    if (!isAdmin) {
+        localStorage.removeItem(ADMIN_KEY);
     }
     
     // Даём немного времени на рендеринг DOM
     await new Promise(resolve => setTimeout(resolve, 100));
     
     const adminButton = document.getElementById("admin-button");
-    console.log("admin-button элемент:", adminButton);
     
     if (adminButton) {
         if (isAdmin) {
             adminButton.classList.remove("hidden");
             adminButton.style.display = "block";
             adminButton.style.visibility = "visible";
-            console.log("✅ Кнопка админ-панели ПОКАЗАНА для пользователя:", savedLogin);
-            console.log("Проверка класса hidden:", adminButton.classList.contains('hidden'));
             await loadUsersForAdmin(); // Загружаем список пользователей для админ-панели
         } else {
             adminButton.classList.add("hidden");
             adminButton.style.display = "none";
-            console.log("❌ Кнопка админ-панели СКРЫТА для пользователя:", savedLogin);
-        }
-    } else {
-        console.error("❌ Кнопка admin-button НЕ НАЙДЕНА в DOM!");
-        // Попробуем найти через querySelector
-        const foundBtn = document.querySelector('#admin-button');
-        console.error("Попытка найти через querySelector:", foundBtn);
-        
-        // Если не найдена, попробуем создать динамически
-        if (!foundBtn && isAdmin) {
-            console.log("⚠️ Пытаемся создать кнопку динамически...");
-            const container = document.querySelector('.calculator-container .container');
-            if (container) {
-                const newBtn = document.createElement('button');
-                newBtn.id = 'admin-button';
-                newBtn.className = 'admin-button';
-                newBtn.textContent = 'Админ-панель';
-                newBtn.onclick = toggleAdminPanel;
-                container.insertBefore(newBtn, container.firstChild.nextSibling);
-                console.log("✅ Кнопка создана динамически");
-            }
+            adminButton.style.visibility = "hidden";
         }
     }
 }
